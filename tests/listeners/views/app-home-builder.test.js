@@ -39,4 +39,17 @@ describe('buildAppHomeView', () => {
     const hasConnected = mrkdwnTexts.some((t) => t.includes('connected'));
     assert.strictEqual(hasConnected, true);
   });
+
+  it('renders the Loop dashboard when data is provided', () => {
+    const dashboard = {
+      threads: [{ channelId: 'C1', handoffCount: 3, looped: ['U1', 'U2'], updatedAt: Date.now() }],
+      expertise: [{ topic: 'billing', experts: [{ userId: 'U1', count: 2 }] }],
+      cases: [{ caseNumber: '00012345', accountName: 'Acme', accountTier: 'Enterprise', status: 'Open', mock: false }],
+    };
+    const view = buildAppHomeView(null, false, dashboard);
+    const texts = view.blocks.filter((b) => b.type === 'section').map((b) => b.text.text);
+    assert.ok(texts.some((t) => t.includes('Active customer threads')));
+    assert.ok(texts.some((t) => t.includes('Who knows what')));
+    assert.ok(texts.some((t) => t.includes('00012345')));
+  });
 });

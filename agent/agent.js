@@ -1,5 +1,8 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { createSalesforceMcpServer } from '../salesforce/mcp-server.js';
+import { getAccessToken } from '../salesforce/sf-token.js';
+import { getTeamApiKey } from './anthropic.js';
 
 const SYSTEM_PROMPT = `\
 You are a friendly Slack assistant. You help people by answering questions, \
@@ -27,6 +30,12 @@ Always react to every user message with \`add_emoji_reaction\` before responding
 Pick any Slack emoji that reflects the *topic* or *tone* of the message — be creative and specific \
 (e.g. \`dog\` for dog topics, \`books\` for learning, \`wave\` for greetings). \
 Vary your picks across a thread; don't repeat the same emoji.
+
+## PRIVACY
+Any conversation history provided to you belongs to the *current* user only. Never reveal, \
+summarize, or answer questions about another user's private messages or what anyone else \
+discussed with you. (Searching public channels via the Slack tools is fine.) If asked about \
+someone else's private conversation, say you can only recall this user's own history with you.
 
 ## SLACK MCP SERVER
 You may have access to the Slack MCP Server, which gives you powerful Slack tools \
@@ -70,6 +79,7 @@ const SLACK_MCP_URL = 'https://mcp.slack.com/mcp';
  * @property {string} threadTs
  * @property {string} messageTs
  * @property {string} [userToken]
+ * @property {string} [teamId]
  */
 
 /**
@@ -122,6 +132,26 @@ export async function runAgent(text, sessionId = undefined, deps = undefined) {
   const mcpServers = { 'agent-tools': agentToolsServer };
   const allowedTools = [...ALLOWED_TOOLS];
 
+  // Salesforce: use the hosted MCP server when configured, else the in-process mock.
+  if (process.env.SALESFORCE_MCP_URL) {
+    let sfToken = null;
+    try {
+      sfToken = await getAccessToken();
+    } catch {
+      // proceed without auth; the MCP call will surface the error
+    }
+    /** @type {any} */
+    const salesforce = { type: 'http', url: process.env.SALESFORCE_MCP_URL };
+    if (sfToken) {
+      salesforce.headers = { Authorization: `Bearer ${sfToken}` };
+    }
+    mcpServers.salesforce = salesforce;
+    allowedTools.push('mcp__salesforce__*');
+  } else {
+    mcpServers.salesforce = createSalesforceMcpServer(deps?.teamId);
+    allowedTools.push('get_salesforce_case');
+  }
+
   if (deps?.userToken) {
     mcpServers['slack-mcp'] = {
       type: 'http',
@@ -131,12 +161,17 @@ export async function runAgent(text, sessionId = undefined, deps = undefined) {
     allowedTools.push('mcp__slack-mcp__*');
   }
 
+  // Use the installing team's own Anthropic key. Options.env REPLACES the
+  // subprocess environment, so spread process.env to keep PATH/HOME/etc.
+  const teamApiKey = getTeamApiKey(deps?.teamId);
+
   /** @type {import('@anthropic-ai/claude-agent-sdk').Options} */
   const options = {
     systemPrompt: SYSTEM_PROMPT,
     mcpServers,
     allowedTools,
     permissionMode: 'bypassPermissions',
+    ...(teamApiKey && { env: { ...process.env, ANTHROPIC_API_KEY: teamApiKey } }),
     ...(sessionId && { resume: sessionId }),
   };
 

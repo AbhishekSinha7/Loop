@@ -1,5 +1,8 @@
 import { runAgent } from '../../agent/index.js';
-import { sessionStore } from '../../thread-context/index.js';
+import { sessionStore, briefContextStore } from '../../thread-context/index.js';
+import { buildFollowupPrompt } from '../../thread-context/brief-context.js';
+import { buildMemoryPrompt } from '../../thread-context/user-memory.js';
+import { recentUserTurns, recordUserTurn } from '../../db/index.js';
 import { buildFeedbackBlocks } from '../views/feedback-builder.js';
 
 /**
@@ -41,9 +44,24 @@ export async function handleMessage({ client, context, event, logger, say, saySt
     const text = event.text || '';
     const threadTs = event.thread_ts || event.ts;
     const userId = /** @type {string} */ (context.userId);
+    const teamId = /** @type {string} */ (context.teamId);
 
     // Get session ID for conversation context
     const existingSessionId = sessionStore.getSession(channelId, threadTs);
+
+    // On a fresh conversation (no live session), seed the first turn with context.
+    // A handoff-brief follow-up wins; otherwise recall this user's OWN prior chats
+    // so the bot remembers past conversations across threads/restarts.
+    let prompt = text;
+    if (!existingSessionId) {
+      const briefContext = isDm ? briefContextStore.get(channelId) : null;
+      if (briefContext) {
+        prompt = buildFollowupPrompt(briefContext, text);
+      } else {
+        const memory = buildMemoryPrompt(recentUserTurns(teamId, userId), text);
+        if (memory) prompt = memory;
+      }
+    }
 
     // Set assistant thread status with loading messages
     await setStatus({
@@ -58,8 +76,8 @@ export async function handleMessage({ client, context, event, logger, say, saySt
     });
 
     // Run the agent with deps for tool access
-    const deps = { client, userId, channelId, threadTs, messageTs: event.ts, userToken: context.userToken };
-    const { responseText, sessionId: newSessionId } = await runAgent(text, existingSessionId ?? undefined, deps);
+    const deps = { client, userId, channelId, threadTs, messageTs: event.ts, userToken: context.userToken, teamId: context.teamId };
+    const { responseText, sessionId: newSessionId } = await runAgent(prompt, existingSessionId ?? undefined, deps);
 
     // Stream response in thread with feedback buttons
     const streamer = sayStream();
@@ -71,6 +89,10 @@ export async function handleMessage({ client, context, event, logger, say, saySt
     if (newSessionId) {
       sessionStore.setSession(channelId, threadTs, newSessionId);
     }
+
+    // Persist this exchange as the user's own memory (scoped by team + user).
+    recordUserTurn(teamId, userId, 'user', text);
+    if (responseText) recordUserTurn(teamId, userId, 'assistant', responseText);
   } catch (e) {
     logger.error(`Failed to handle message: ${e}`);
     await say({

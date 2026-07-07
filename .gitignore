@@ -18,3 +18,11 @@ node_modules/
 data/
 
 loop-data.json
+
+# SQLite data store (holds encrypted tokens + tenant data — never commit)
+loop.db
+loop.db-wal
+loop.db-shm
+*.db
+*.db-wal
+*.db-shm
