@@ -1,5 +1,7 @@
 import { runAgent } from '../../agent/index.js';
 import { sessionStore } from '../../thread-context/index.js';
+import { buildMemoryPrompt } from '../../thread-context/user-memory.js';
+import { recentUserTurns, recordUserTurn } from '../../db/index.js';
 import { buildFeedbackBlocks } from '../views/feedback-builder.js';
 
 /**
@@ -13,6 +15,7 @@ export async function handleAppMentioned({ client, context, event, logger, say, 
     const text = event.text || '';
     const threadTs = event.thread_ts || event.ts;
     const userId = /** @type {string} */ (context.userId);
+    const teamId = /** @type {string} */ (context.teamId);
 
     // Strip the bot mention from the text
     const cleanedText = text.replace(/<@[A-Z0-9]+>/g, '').trim();
@@ -40,9 +43,16 @@ export async function handleAppMentioned({ client, context, event, logger, say, 
     // Get session ID for conversation context
     const existingSessionId = sessionStore.getSession(channelId, threadTs);
 
+    // On a fresh thread, recall this user's OWN prior chats with the bot.
+    let prompt = cleanedText;
+    if (!existingSessionId) {
+      const memory = buildMemoryPrompt(recentUserTurns(teamId, userId), cleanedText);
+      if (memory) prompt = memory;
+    }
+
     // Run the agent with deps for tool access
-    const deps = { client, userId, channelId, threadTs, messageTs: event.ts, userToken: context.userToken };
-    const { responseText, sessionId: newSessionId } = await runAgent(cleanedText, existingSessionId ?? undefined, deps);
+    const deps = { client, userId, channelId, threadTs, messageTs: event.ts, userToken: context.userToken, teamId: context.teamId };
+    const { responseText, sessionId: newSessionId } = await runAgent(prompt, existingSessionId ?? undefined, deps);
 
     // Stream response in thread with feedback buttons
     const streamer = sayStream();
@@ -54,6 +64,10 @@ export async function handleAppMentioned({ client, context, event, logger, say, 
     if (newSessionId) {
       sessionStore.setSession(channelId, threadTs, newSessionId);
     }
+
+    // Persist this exchange as the user's own memory (scoped by team + user).
+    recordUserTurn(teamId, userId, 'user', cleanedText);
+    if (responseText) recordUserTurn(teamId, userId, 'assistant', responseText);
   } catch (e) {
     logger.error(`Failed to handle app mention: ${e}`);
     await say({

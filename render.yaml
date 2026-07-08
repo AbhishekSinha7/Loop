@@ -1,0 +1,37 @@
+# Render blueprint — production deploy for Loop (multi-tenant).
+# New → Blueprint in the Render dashboard, point it at this repo.
+# The persistent disk (loop.db) requires a paid instance type; the free tier has
+# no disk and spins down, which drops installs — not suitable for production.
+services:
+  - type: web
+    name: loop
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm run start:oauth
+    healthCheckPath: /health
+    disk:
+      name: loop-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOOP_DB_PATH
+        value: /data/loop.db
+      # Generated once by Render; rotating TOKEN_ENC_KEY orphans stored tenant
+      # secrets, so treat it as permanent.
+      - key: TOKEN_ENC_KEY
+        generateValue: true
+      - key: SLACK_STATE_SECRET
+        generateValue: true
+      # Paste these in the Render dashboard (api.slack.com/apps → Basic Information).
+      - key: SLACK_CLIENT_ID
+        sync: false
+      - key: SLACK_CLIENT_SECRET
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      # The service's public origin, e.g. https://loop.onrender.com (no trailing slash).
+      - key: PUBLIC_URL
+        sync: false

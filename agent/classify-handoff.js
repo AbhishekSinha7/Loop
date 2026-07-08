@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { getAnthropic } from './anthropic.js';
 
 const SYSTEM_PROMPT = `You classify a single Slack message.
 
@@ -13,24 +13,24 @@ Answer with exactly one word: YES or NO.`;
  * Ask Claude whether a message is handing the thread to a mentioned user.
  * Throws if the model is unavailable (e.g. no ANTHROPIC_API_KEY); callers
  * should catch and fall back to a heuristic.
+ * @param {string} teamId
  * @param {string} text
  * @returns {Promise<boolean>}
  */
-export async function classifyHandoff(text) {
-  /** @type {import('@anthropic-ai/claude-agent-sdk').Options} */
-  const options = {
-    systemPrompt: SYSTEM_PROMPT,
-    allowedTools: [],
-    permissionMode: 'bypassPermissions',
-  };
+export async function classifyHandoff(teamId, text) {
+  const resp = await getAnthropic(teamId).messages.create(
+    {
+      model: 'claude-opus-4-8',
+      max_tokens: 16, // one word: YES / NO
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Classify this message:\n\n${text}` }],
+    },
+    { timeout: 8000, maxRetries: 0 }, // single bounded attempt; throws on timeout → caller falls back
+  );
 
   let out = '';
-  for await (const message of query({ prompt: `Classify this message:\n\n${text}`, options })) {
-    if (message.type === 'assistant') {
-      for (const block of message.message.content) {
-        if (block.type === 'text') out += block.text;
-      }
-    }
+  for (const block of resp.content) {
+    if (block.type === 'text') out += block.text;
   }
   return out.trim().toLowerCase().startsWith('yes');
 }

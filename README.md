@@ -44,7 +44,7 @@ slack login
 
 ```sh
 slack create my-starter-agent --template slack-samples/bolt-js-starter-agent --subdir claude-agent-sdk
-cd Loop
+cd my-starter-agent
 ```
 
 </details>
