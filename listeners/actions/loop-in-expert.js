@@ -20,9 +20,9 @@ export async function handleLoopInExpert({ ack, body, client, context, respond, 
       text: `👋 <@${expertId}> — looping you in${topic ? ` on this *${topic}*` : ''} thread; you've handled similar ones before. _(suggested by Loop)_`,
     });
 
-    const thread = getThreadBySlack(teamId, channelId, rootTs);
-    if (thread) recordHandoff(teamId, { threadId: thread.id, toId: expertId });
-    if (topic) recordExpertise(teamId, { userId: expertId, topic });
+    const thread = await getThreadBySlack(teamId, channelId, rootTs);
+    if (thread) await recordHandoff(teamId, { threadId: thread.id, toId: expertId });
+    if (topic) await recordExpertise(teamId, { userId: expertId, topic });
 
     await respond({ replace_original: false, text: `✅ Looped in <@${expertId}>.` });
     logger.debug(`Looped in expert ${expertId} for topic ${topic}`);

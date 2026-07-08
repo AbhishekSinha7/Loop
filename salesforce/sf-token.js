@@ -29,7 +29,7 @@ const cache = new Map();
 export async function getAccessToken(teamId) {
   if (process.env.SALESFORCE_MCP_TOKEN) return process.env.SALESFORCE_MCP_TOKEN;
 
-  const conn = teamId ? getSfConnection(teamId) : null;
+  const conn = teamId ? await getSfConnection(teamId) : null;
   const refreshToken = conn?.refreshToken || process.env.SALESFORCE_REFRESH_TOKEN;
   const clientId = conn?.clientId || process.env.SALESFORCE_CLIENT_ID;
   const clientSecret = conn?.clientSecret || process.env.SALESFORCE_CLIENT_SECRET;

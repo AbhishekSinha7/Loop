@@ -12,7 +12,7 @@ export async function handleForgetMe({ ack, context, command, respond, logger })
   try {
     const teamId = /** @type {string} */ (context.teamId || command.team_id);
     const userId = /** @type {string} */ (context.userId || command.user_id);
-    deleteUserMemory(teamId, userId);
+    await deleteUserMemory(teamId, userId);
     await respond({
       response_type: 'ephemeral',
       text: '🧹 Done — I’ve forgotten our past conversations. New chats start fresh.',

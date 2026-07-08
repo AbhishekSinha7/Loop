@@ -71,7 +71,7 @@ export async function handleHandoff({ client, context, event, logger }) {
     const threadTs = event.thread_ts || event.ts;
     const replies = await client.conversations.replies({ channel: event.channel, ts: threadTs, limit: 50 });
     const messages = (replies.messages || []).map((m) => ({ user: m.user, text: m.text }));
-    const threadId = upsertThread(teamId, { channelId: event.channel, rootTs: threadTs });
+    const threadId = await upsertThread(teamId, { channelId: event.channel, rootTs: threadTs });
     // Resolve display names (users:read) once.
     const cache = new Map();
     const nameOf = (/** @type {string} */ userId) => cache.get(userId) || userId;
@@ -119,36 +119,37 @@ export async function handleHandoff({ client, context, event, logger }) {
     // Per-thread dossier canvas: create/update once, link it in each brief.
     let canvasLink = null;
     try {
-      const existing = getThreadBySlack(teamId, event.channel, threadTs)?.canvasId;
+      const existing = (await getThreadBySlack(teamId, event.channel, threadTs))?.canvasId;
+      const priorHandoffs = (await handoffsForThread(teamId, threadId)).length;
       const canvas = await syncThreadCanvas({
         channelId: event.channel,
         existingCanvasId: existing,
         summary,
         caseContext,
         related,
-        handoffCount: handoffsForThread(teamId, threadId).length + targets.length,
+        handoffCount: priorHandoffs + targets.length,
         loopedIn: targets,
         userToken: slackUserToken,
       });
       if (canvas) {
         canvasLink = canvas.link;
-        if (!existing && canvas.canvasId) setThreadCanvasId(teamId, event.channel, threadTs, canvas.canvasId);
+        if (!existing && canvas.canvasId) await setThreadCanvasId(teamId, event.channel, threadTs, canvas.canvasId);
       }
     } catch (e) {
       logger.warn(`Canvas sync failed: ${e}`);
     }
 
     for (const userId of targets) {
-      const handoffCount = recordHandoff(teamId, { threadId, fromId: author, toId: userId });
+      const handoffCount = await recordHandoff(teamId, { threadId, fromId: author, toId: userId });
 
       // Is there a stronger expert in this topic than the person being looped in?
       let suggestion = null;
       if (topic) {
-        const expert = topExpertForTopic(teamId, topic, [userId, author, botUserId]);
-        if (expert && expert.count > expertiseCount(teamId, topic, userId)) {
+        const expert = await topExpertForTopic(teamId, topic, [userId, author, botUserId]);
+        if (expert && expert.count > (await expertiseCount(teamId, topic, userId))) {
           suggestion = { expertId: expert.userId, topic, channelId: event.channel, rootTs: threadTs };
         }
-        recordExpertise(teamId, { userId, topic }); // being looped in builds topic expertise
+        await recordExpertise(teamId, { userId, topic }); // being looped in builds topic expertise
       }
 
       const brief = buildBrief({ channelId: event.channel, messages, nameOf, handoffCount, summary, suggestion, caseContext, related, canvasLink });

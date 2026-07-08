@@ -32,7 +32,7 @@ export async function draftReply(teamId, ctx) {
   if (ctx.related?.summary) parts.push(`Prior related context: ${ctx.related.summary}`);
   if (ctx.transcript) parts.push('', 'Thread so far:', ctx.transcript);
 
-  const resp = await getAnthropic(teamId).messages.create(
+  const resp = await (await getAnthropic(teamId)).messages.create(
     {
       model: 'claude-opus-4-8',
       max_tokens: 512,

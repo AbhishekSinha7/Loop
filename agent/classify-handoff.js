@@ -18,7 +18,7 @@ Answer with exactly one word: YES or NO.`;
  * @returns {Promise<boolean>}
  */
 export async function classifyHandoff(teamId, text) {
-  const resp = await getAnthropic(teamId).messages.create(
+  const resp = await (await getAnthropic(teamId)).messages.create(
     {
       model: 'claude-opus-4-8',
       max_tokens: 16, // one word: YES / NO

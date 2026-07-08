@@ -56,7 +56,7 @@ export async function handleConnectSalesforce({ ack, body, client, context, logg
     }
     // Prefill existing values so this doubles as an edit form (secrets aren't echoed).
     const teamId = /** @type {string} */ (context.teamId || body.team?.id);
-    const existing = getSfConnection(teamId);
+    const existing = await getSfConnection(teamId);
     const secretSet = !!existing?.clientSecret;
 
     await client.views.open({

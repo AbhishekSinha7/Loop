@@ -23,7 +23,7 @@ invent details that aren't in the thread.`;
  * @returns {Promise<{ issue: string, tried: string, pending: string, topic: string | null }>}
  */
 export async function synthesizeBrief(teamId, transcript) {
-  const resp = await getAnthropic(teamId).messages.create(
+  const resp = await (await getAnthropic(teamId)).messages.create(
     {
       model: 'claude-opus-4-8',
       max_tokens: 1024,

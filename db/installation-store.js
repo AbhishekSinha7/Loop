@@ -1,4 +1,4 @@
-// Multi-tenant Slack installation store backed by the shared SQLite DB, with
+// Multi-tenant Slack installation store backed by the shared libSQL client, with
 // tokens encrypted at rest. Implements Bolt's InstallationStore interface.
 import { db, deleteTeamData } from './index.js';
 import { encrypt, decrypt } from './crypto.js';
@@ -22,23 +22,24 @@ function keyFrom(source) {
 export const installationStore = {
   storeInstallation: async (installation) => {
     const k = keyFrom(installation);
-    db.prepare(
-      `INSERT INTO installations (install_key, data, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(install_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-    ).run(k, encrypt(JSON.stringify(installation)), Date.now());
+    await db.execute({
+      sql: `INSERT INTO installations (install_key, data, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(install_key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+      args: [k, encrypt(JSON.stringify(installation)), Date.now()],
+    });
   },
 
   fetchInstallation: async (query) => {
     const k = keyFrom(query);
-    const row = /** @type {any} */ (db.prepare('SELECT data FROM installations WHERE install_key = ?').get(k));
+    const row = (await db.execute({ sql: 'SELECT data FROM installations WHERE install_key = ?', args: [k] })).rows[0];
     if (!row) throw new Error(`No Slack installation found for ${k}`);
-    return JSON.parse(decrypt(row.data));
+    return JSON.parse(decrypt(/** @type {string} */ (row.data)));
   },
 
   deleteInstallation: async (query) => {
     const k = keyFrom(query);
-    db.prepare('DELETE FROM installations WHERE install_key = ?').run(k);
+    await db.execute({ sql: 'DELETE FROM installations WHERE install_key = ?', args: [k] });
     const teamId = query.team?.id ?? query.teamId;
-    if (teamId) deleteTeamData(teamId); // purge the team's Loop data on uninstall
+    if (teamId) await deleteTeamData(teamId); // purge the team's Loop data on uninstall
   },
 };

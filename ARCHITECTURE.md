@@ -151,11 +151,13 @@ content is stored at rest — encrypted with `TOKEN_ENC_KEY`.
 
 ---
 
-## 5. Data layer (`node:sqlite`)
+## 5. Data layer (libSQL / Turso)
 
-Loop uses Node's **built-in** `node:sqlite` (`DatabaseSync`, Node ≥ 22.5) — a single durable file
-(`loop.db`, path via `LOOP_DB_PATH`), WAL mode, no DB server, no native build. All [db/index.js](db/index.js)
-functions are **synchronous** and take `teamId` as the first argument.
+Loop uses **libSQL** (SQLite) via `@libsql/client`: a **local file** in dev (`loop.db`, path via
+`LOOP_DB_PATH`) and **Turso** (hosted libSQL, free tier) in production when `TURSO_DATABASE_URL` is set —
+so data persists on any host with no DB server to run. All [db/index.js](db/index.js) functions are
+**async** and take `teamId` as the first argument; the schema is created once on import via top-level
+`await`.
 
 | Table | Primary key | Holds |
 |---|---|---|
@@ -166,6 +168,7 @@ functions are **synchronous** and take `teamId` as the first argument.
 | `installations` | `install_key` | Encrypted Bolt installation (bot/user tokens) |
 | `sf_connections` | `team_id` | Per-org Salesforce config + encrypted refresh token |
 | `user_memory` | `id` (idx `team_id, user_id`) | Per-user conversation turns with the bot (encrypted), capped ~20 exchanges |
+| `app_settings` | `team_id` | Per-team Anthropic API key (encrypted) |
 
 Tokens/secrets are encrypted with **AES-256-GCM** ([db/crypto.js](db/crypto.js)) using `TOKEN_ENC_KEY`.
 Without the key, values are stored base64 with a one-time warning (dev only).
@@ -175,7 +178,7 @@ Without the key, values are stored base64 with a one-time warning (dev only).
 ## 6. Running it as a developer
 
 ### Prerequisites
-- **Node ≥ 22.5** (for `node:sqlite`) — check `node -v`.
+- **Node ≥ 20** — check `node -v`.
 - An **Anthropic API key**.
 - A Slack workspace where you can install apps (the [Slack Developer Program](https://api.slack.com/developer-program) gives you a sandbox).
 
@@ -293,7 +296,7 @@ button — see [SALESFORCE_SETUP.md](SALESFORCE_SETUP.md).
 | [app.js](app.js) | Socket-Mode entry (dev). Builds the Bolt `App` with bot+app tokens, registers listeners. |
 | [app-oauth.js](app-oauth.js) | HTTP/OAuth entry (production, multi-tenant). SQLite install store with a bot-token dev fallback; custom `/salesforce/callback` route; OAuth installer options. |
 | [manifest.json](manifest.json) | Slack app config: scopes (bot + user), events, slash commands (`/customer-history`, `/forget-me`), MCP enabled, distribution. |
-| [package.json](package.json) | Scripts (`start`, `start:oauth`, `check`, `test`, `lint`), deps, `engines.node >= 22.5`. |
+| [package.json](package.json) | Scripts (`start`, `start:oauth`, `check`, `test`, `lint`), deps, `engines.node >= 20`. |
 | [Dockerfile](Dockerfile) / [.dockerignore](.dockerignore) | Container build for Cloud Run/ECS/K8s; `loop.db` on a `/data` volume. |
 | [.env.example](.env.example) | All env vars (Anthropic, Slack, Salesforce, distribution, crypto) with inline docs. |
 | [biome.json](biome.json) | Lint/format config. |
@@ -352,7 +355,7 @@ button — see [SALESFORCE_SETUP.md](SALESFORCE_SETUP.md).
 ### Data & crypto
 | File | Purpose |
 |---|---|
-| [db/index.js](db/index.js) | `node:sqlite` data layer; schema + all team-scoped CRUD; `deleteTeamData`; SF-connection getters/setters; per-user memory (`recordUserTurn`/`recentUserTurns`/`deleteUserMemory`); exports the shared `db`. |
+| [db/index.js](db/index.js) | libSQL/Turso data layer (async); schema + all team-scoped CRUD; `deleteTeamData`; SF-connection + app-settings getters/setters; per-user memory (`recordUserTurn`/`recentUserTurns`/`deleteUserMemory`); exports the shared `db`. |
 | [db/crypto.js](db/crypto.js) | AES-256-GCM `encrypt`/`decrypt` for tokens at rest (`TOKEN_ENC_KEY`). |
 | [db/installation-store.js](db/installation-store.js) | Bolt `InstallationStore` over SQLite — encrypted store/fetch, and **purge team data** on delete. |
 

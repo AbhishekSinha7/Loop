@@ -163,7 +163,7 @@ export async function runAgent(text, sessionId = undefined, deps = undefined) {
 
   // Use the installing team's own Anthropic key. Options.env REPLACES the
   // subprocess environment, so spread process.env to keep PATH/HOME/etc.
-  const teamApiKey = getTeamApiKey(deps?.teamId);
+  const teamApiKey = await getTeamApiKey(deps?.teamId);
 
   /** @type {import('@anthropic-ai/claude-agent-sdk').Options} */
   const options = {

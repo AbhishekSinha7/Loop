@@ -1,15 +1,31 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { encrypt, decrypt } from './crypto.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = process.env.LOOP_DB_PATH || join(__dirname, '..', 'loop.db');
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL');
-db.exec(`
+// Turso (hosted libSQL) in production; a local file in dev. Same SQL either way.
+//   TURSO_DATABASE_URL=libsql://<db>.turso.io  + TURSO_AUTH_TOKEN=...
+// else a local file at LOOP_DB_PATH (default ./loop.db).
+const config = process.env.TURSO_DATABASE_URL
+  ? { url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN, intMode: 'number' }
+  : { url: `file:${process.env.LOOP_DB_PATH || join(__dirname, '..', 'loop.db')}`, intMode: 'number' };
+
+const db = createClient(/** @type {any} */ (config));
+
+// A local file in production is almost always a mistake: ephemeral hosts (Render
+// free, etc.) wipe it on restart, dropping every install. Nudge toward Turso.
+if (process.env.NODE_ENV === 'production' && !process.env.TURSO_DATABASE_URL) {
+  console.warn('[loop] Using a LOCAL SQLite file in production — data is lost on restart on ephemeral hosts. Set TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN) for durable storage.');
+}
+
+// Shared client for the OAuth installation store (db/installation-store.js).
+export { db };
+
+// Schema — created once on import (top-level await blocks importers until ready).
+await db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS threads (
     team_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
@@ -75,8 +91,15 @@ db.exec(`
   );
 `);
 
-// Shared connection for the OAuth installation store (db/installation-store.js).
-export { db };
+// --- tiny query helpers over the libSQL client ---
+/** @param {string} sql @param {any[]} [args] @returns {Promise<any | null>} */
+const one = async (sql, args = []) => (await db.execute({ sql, args })).rows[0] ?? null;
+/** @param {string} sql @param {any[]} [args] @returns {Promise<any[]>} */
+const many = async (sql, args = []) => /** @type {any[]} */ ((await db.execute({ sql, args })).rows);
+/** @param {string} sql @param {any[]} [args] @returns {Promise<void>} */
+const run = async (sql, args = []) => {
+  await db.execute({ sql, args });
+};
 
 const normTopic = (/** @type {string} */ topic) => (topic || '').trim().toLowerCase();
 
@@ -84,20 +107,16 @@ const normTopic = (/** @type {string} */ topic) => (topic || '').trim().toLowerC
  * Insert the thread if new, else touch it. Returns the stable thread id.
  * @param {string} teamId
  * @param {{ channelId: string, rootTs: string, account?: string | null }} input
- * @returns {string}
+ * @returns {Promise<string>}
  */
-export function upsertThread(teamId, { channelId, rootTs, account = null }) {
-  const existing = db
-    .prepare('SELECT id FROM threads WHERE team_id = ? AND channel_id = ? AND root_ts = ?')
-    .get(teamId, channelId, rootTs);
+export async function upsertThread(teamId, { channelId, rootTs, account = null }) {
+  const existing = await one('SELECT id FROM threads WHERE team_id = ? AND channel_id = ? AND root_ts = ?', [teamId, channelId, rootTs]);
   if (existing) {
-    db.prepare('UPDATE threads SET updated_at = ?, account = COALESCE(account, ?) WHERE team_id = ? AND channel_id = ? AND root_ts = ?')
-      .run(Date.now(), account, teamId, channelId, rootTs);
-    return /** @type {any} */ (existing).id;
+    await run('UPDATE threads SET updated_at = ?, account = COALESCE(account, ?) WHERE team_id = ? AND channel_id = ? AND root_ts = ?', [Date.now(), account, teamId, channelId, rootTs]);
+    return existing.id;
   }
   const id = randomUUID();
-  db.prepare('INSERT INTO threads (team_id, channel_id, root_ts, id, account, status, canvas_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(teamId, channelId, rootTs, id, account, 'open', null, Date.now());
+  await run('INSERT INTO threads (team_id, channel_id, root_ts, id, account, status, canvas_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [teamId, channelId, rootTs, id, account, 'open', null, Date.now()]);
   return id;
 }
 
@@ -105,25 +124,22 @@ export function upsertThread(teamId, { channelId, rootTs, account = null }) {
  * Record a handoff event. Returns how many handoffs this thread has seen.
  * @param {string} teamId
  * @param {{ threadId: string, fromId?: string | null, toId?: string | null, briefSent?: boolean }} input
- * @returns {number}
+ * @returns {Promise<number>}
  */
-export function recordHandoff(teamId, { threadId, fromId = null, toId = null, briefSent = true }) {
-  db.prepare('INSERT INTO handoffs (id, team_id, thread_id, from_id, to_id, occurred_at, brief_sent) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(randomUUID(), teamId, threadId, fromId, toId, Date.now(), briefSent ? 1 : 0);
-  const row = db.prepare('SELECT COUNT(*) AS c FROM handoffs WHERE team_id = ? AND thread_id = ?').get(teamId, threadId);
-  return /** @type {any} */ (row).c;
+export async function recordHandoff(teamId, { threadId, fromId = null, toId = null, briefSent = true }) {
+  await run('INSERT INTO handoffs (id, team_id, thread_id, from_id, to_id, occurred_at, brief_sent) VALUES (?, ?, ?, ?, ?, ?, ?)', [randomUUID(), teamId, threadId, fromId, toId, Date.now(), briefSent ? 1 : 0]);
+  const row = await one('SELECT COUNT(*) AS c FROM handoffs WHERE team_id = ? AND thread_id = ?', [teamId, threadId]);
+  return row.c;
 }
 
 /**
  * @param {string} teamId
  * @param {string} channelId
  * @param {string} rootTs
- * @returns {any | null}
+ * @returns {Promise<any | null>}
  */
-export function getThreadBySlack(teamId, channelId, rootTs) {
-  const r = /** @type {any} */ (
-    db.prepare('SELECT * FROM threads WHERE team_id = ? AND channel_id = ? AND root_ts = ?').get(teamId, channelId, rootTs)
-  );
+export async function getThreadBySlack(teamId, channelId, rootTs) {
+  const r = await one('SELECT * FROM threads WHERE team_id = ? AND channel_id = ? AND root_ts = ?', [teamId, channelId, rootTs]);
   if (!r) return null;
   return { id: r.id, channelId: r.channel_id, rootTs: r.root_ts, account: r.account, status: r.status, canvasId: r.canvas_id, updatedAt: r.updated_at };
 }
@@ -134,24 +150,23 @@ export function getThreadBySlack(teamId, channelId, rootTs) {
  * @param {string} channelId
  * @param {string} rootTs
  * @param {string} canvasId
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function setThreadCanvasId(teamId, channelId, rootTs, canvasId) {
-  db.prepare('UPDATE threads SET canvas_id = ? WHERE team_id = ? AND channel_id = ? AND root_ts = ?')
-    .run(canvasId, teamId, channelId, rootTs);
+export async function setThreadCanvasId(teamId, channelId, rootTs, canvasId) {
+  await run('UPDATE threads SET canvas_id = ? WHERE team_id = ? AND channel_id = ? AND root_ts = ?', [canvasId, teamId, channelId, rootTs]);
 }
 
 /**
  * Credit a user with one handoff's worth of expertise in a topic.
  * @param {string} teamId
  * @param {{ userId: string, topic: string }} input
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function recordExpertise(teamId, { userId, topic }) {
+export async function recordExpertise(teamId, { userId, topic }) {
   const t = normTopic(topic);
   if (!t || !userId) return;
-  db.prepare(`INSERT INTO expertise (team_id, topic, user_id, count) VALUES (?, ?, ?, 1)
-    ON CONFLICT (team_id, topic, user_id) DO UPDATE SET count = count + 1`).run(teamId, t, userId);
+  await run(`INSERT INTO expertise (team_id, topic, user_id, count) VALUES (?, ?, ?, 1)
+    ON CONFLICT (team_id, topic, user_id) DO UPDATE SET count = count + 1`, [teamId, t, userId]);
 }
 
 /**
@@ -159,11 +174,11 @@ export function recordExpertise(teamId, { userId, topic }) {
  * @param {string} teamId
  * @param {string} topic
  * @param {string} userId
- * @returns {number}
+ * @returns {Promise<number>}
  */
-export function expertiseCount(teamId, topic, userId) {
-  const r = db.prepare('SELECT count FROM expertise WHERE team_id = ? AND topic = ? AND user_id = ?').get(teamId, normTopic(topic), userId);
-  return r ? /** @type {any} */ (r).count : 0;
+export async function expertiseCount(teamId, topic, userId) {
+  const r = await one('SELECT count FROM expertise WHERE team_id = ? AND topic = ? AND user_id = ?', [teamId, normTopic(topic), userId]);
+  return r ? r.count : 0;
 }
 
 /**
@@ -171,12 +186,10 @@ export function expertiseCount(teamId, topic, userId) {
  * @param {string} teamId
  * @param {string} topic
  * @param {(string | null | undefined)[]} [excludeIds]
- * @returns {{ userId: string, count: number } | null}
+ * @returns {Promise<{ userId: string, count: number } | null>}
  */
-export function topExpertForTopic(teamId, topic, excludeIds = []) {
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT user_id, count FROM expertise WHERE team_id = ? AND topic = ? ORDER BY count DESC').all(teamId, normTopic(topic))
-  );
+export async function topExpertForTopic(teamId, topic, excludeIds = []) {
+  const rows = await many('SELECT user_id, count FROM expertise WHERE team_id = ? AND topic = ? ORDER BY count DESC', [teamId, normTopic(topic)]);
   const ex = new Set(excludeIds);
   for (const row of rows) {
     if (ex.has(row.user_id)) continue;
@@ -189,12 +202,10 @@ export function topExpertForTopic(teamId, topic, excludeIds = []) {
  * Most recently active threads, newest first.
  * @param {string} teamId
  * @param {number} [limit]
- * @returns {any[]}
+ * @returns {Promise<any[]>}
  */
-export function recentThreads(teamId, limit = 10) {
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT * FROM threads WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?').all(teamId, limit)
-  );
+export async function recentThreads(teamId, limit = 10) {
+  const rows = await many('SELECT * FROM threads WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?', [teamId, limit]);
   return rows.map((r) => ({ id: r.id, channelId: r.channel_id, rootTs: r.root_ts, canvasId: r.canvas_id, updatedAt: r.updated_at }));
 }
 
@@ -202,12 +213,10 @@ export function recentThreads(teamId, limit = 10) {
  * All handoff events recorded for a thread, oldest first.
  * @param {string} teamId
  * @param {string} threadId
- * @returns {any[]}
+ * @returns {Promise<any[]>}
  */
-export function handoffsForThread(teamId, threadId) {
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT * FROM handoffs WHERE team_id = ? AND thread_id = ? ORDER BY occurred_at ASC').all(teamId, threadId)
-  );
+export async function handoffsForThread(teamId, threadId) {
+  const rows = await many('SELECT * FROM handoffs WHERE team_id = ? AND thread_id = ? ORDER BY occurred_at ASC', [teamId, threadId]);
   return rows.map((r) => ({ id: r.id, threadId: r.thread_id, fromId: r.from_id, toId: r.to_id, occurredAt: r.occurred_at, briefSent: !!r.brief_sent }));
 }
 
@@ -215,12 +224,10 @@ export function handoffsForThread(teamId, threadId) {
  * Per-topic expertise, each with experts sorted by count (desc). Topics with the
  * strongest expert come first.
  * @param {string} teamId
- * @returns {Array<{ topic: string, experts: Array<{ userId: string, count: number }> }>}
+ * @returns {Promise<Array<{ topic: string, experts: Array<{ userId: string, count: number }> }>>}
  */
-export function expertiseSummary(teamId) {
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT topic, user_id, count FROM expertise WHERE team_id = ? ORDER BY topic ASC, count DESC').all(teamId)
-  );
+export async function expertiseSummary(teamId) {
+  const rows = await many('SELECT topic, user_id, count FROM expertise WHERE team_id = ? ORDER BY topic ASC, count DESC', [teamId]);
   /** @type {Map<string, Array<{ userId: string, count: number }>>} */
   const byTopic = new Map();
   for (const r of rows) {
@@ -236,12 +243,10 @@ export function expertiseSummary(teamId) {
  * Most recently seen Salesforce cases, newest first.
  * @param {string} teamId
  * @param {number} [limit]
- * @returns {any[]}
+ * @returns {Promise<any[]>}
  */
-export function recentCases(teamId, limit = 5) {
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT data FROM cases WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?').all(teamId, limit)
-  );
+export async function recentCases(teamId, limit = 5) {
+  const rows = await many('SELECT data FROM cases WHERE team_id = ? ORDER BY updated_at DESC LIMIT ?', [teamId, limit]);
   return rows.map((r) => JSON.parse(r.data));
 }
 
@@ -250,34 +255,33 @@ export function recentCases(teamId, limit = 5) {
  * @param {string} teamId
  * @param {string} caseNumber
  * @param {any} fields
- * @returns {any}
+ * @returns {Promise<any>}
  */
-export function upsertCase(teamId, caseNumber, fields) {
+export async function upsertCase(teamId, caseNumber, fields) {
   const data = { caseNumber, ...fields, updatedAt: Date.now() };
-  db.prepare(`INSERT INTO cases (team_id, case_number, data, updated_at) VALUES (?, ?, ?, ?)
-    ON CONFLICT (team_id, case_number) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`)
-    .run(teamId, caseNumber, JSON.stringify(data), data.updatedAt);
+  await run(`INSERT INTO cases (team_id, case_number, data, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (team_id, case_number) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`, [teamId, caseNumber, JSON.stringify(data), data.updatedAt]);
   return data;
 }
 
 /**
  * @param {string} teamId
  * @param {string} caseNumber
- * @returns {any | null}
+ * @returns {Promise<any | null>}
  */
-export function getCase(teamId, caseNumber) {
-  const r = db.prepare('SELECT data FROM cases WHERE team_id = ? AND case_number = ?').get(teamId, caseNumber);
-  return r ? JSON.parse(/** @type {any} */ (r).data) : null;
+export async function getCase(teamId, caseNumber) {
+  const r = await one('SELECT data FROM cases WHERE team_id = ? AND case_number = ?', [teamId, caseNumber]);
+  return r ? JSON.parse(r.data) : null;
 }
 
 /**
  * Remove all of a team's Loop data (used on app uninstall).
  * @param {string} teamId
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function deleteTeamData(teamId) {
+export async function deleteTeamData(teamId) {
   for (const table of ['threads', 'handoffs', 'expertise', 'cases', 'sf_connections', 'user_memory', 'app_settings']) {
-    db.prepare(`DELETE FROM ${table} WHERE team_id = ?`).run(teamId);
+    await run(`DELETE FROM ${table} WHERE team_id = ?`, [teamId]);
   }
 }
 
@@ -293,17 +297,17 @@ const MAX_USER_TURNS = 40; // keep ~20 recent exchanges per user
  * @param {string} userId
  * @param {'user' | 'assistant'} role
  * @param {string} content
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function recordUserTurn(teamId, userId, role, content) {
+export async function recordUserTurn(teamId, userId, role, content) {
   if (!teamId || !userId || !content) return;
-  db.prepare('INSERT INTO user_memory (id, team_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(randomUUID(), teamId, userId, role, encrypt(content), Date.now());
-  db.prepare(
+  await run('INSERT INTO user_memory (id, team_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)', [randomUUID(), teamId, userId, role, encrypt(content), Date.now()]);
+  await run(
     `DELETE FROM user_memory WHERE team_id = ? AND user_id = ? AND id NOT IN (
        SELECT id FROM user_memory WHERE team_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?
      )`,
-  ).run(teamId, userId, teamId, userId, MAX_USER_TURNS);
+    [teamId, userId, teamId, userId, MAX_USER_TURNS],
+  );
 }
 
 /**
@@ -312,14 +316,11 @@ export function recordUserTurn(teamId, userId, role, content) {
  * @param {string} teamId
  * @param {string} userId
  * @param {number} [limit]
- * @returns {Array<{ role: string, content: string, at: number }>}
+ * @returns {Promise<Array<{ role: string, content: string, at: number }>>}
  */
-export function recentUserTurns(teamId, userId, limit = 12) {
+export async function recentUserTurns(teamId, userId, limit = 12) {
   if (!teamId || !userId) return [];
-  const rows = /** @type {any[]} */ (
-    db.prepare('SELECT role, content, created_at FROM user_memory WHERE team_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?')
-      .all(teamId, userId, limit)
-  );
+  const rows = await many('SELECT role, content, created_at FROM user_memory WHERE team_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?', [teamId, userId, limit]);
   return rows.reverse().map((r) => ({ role: r.role, content: decrypt(r.content), at: r.created_at }));
 }
 
@@ -327,42 +328,35 @@ export function recentUserTurns(teamId, userId, limit = 12) {
  * Forget a user's stored conversation memory (e.g. a "forget me" request).
  * @param {string} teamId
  * @param {string} userId
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function deleteUserMemory(teamId, userId) {
-  db.prepare('DELETE FROM user_memory WHERE team_id = ? AND user_id = ?').run(teamId, userId);
+export async function deleteUserMemory(teamId, userId) {
+  await run('DELETE FROM user_memory WHERE team_id = ? AND user_id = ?', [teamId, userId]);
 }
 
 /**
  * Store/replace a team's Salesforce connection (secrets encrypted at rest).
  * @param {string} teamId
  * @param {{ mcpUrl?: string|null, loginUrl?: string|null, clientId?: string|null, refreshToken?: string|null, clientSecret?: string|null }} c
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function setSfConnection(teamId, { mcpUrl, loginUrl, clientId, refreshToken, clientSecret }) {
-  db.prepare(
+export async function setSfConnection(teamId, { mcpUrl, loginUrl, clientId, refreshToken, clientSecret }) {
+  await run(
     `INSERT INTO sf_connections (team_id, mcp_url, login_url, client_id, refresh_token_enc, client_secret_enc, connected_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(team_id) DO UPDATE SET mcp_url = excluded.mcp_url, login_url = excluded.login_url,
        client_id = excluded.client_id, refresh_token_enc = COALESCE(excluded.refresh_token_enc, sf_connections.refresh_token_enc),
        client_secret_enc = COALESCE(excluded.client_secret_enc, sf_connections.client_secret_enc), connected_at = excluded.connected_at`,
-  ).run(
-    teamId,
-    mcpUrl || null,
-    loginUrl || null,
-    clientId || null,
-    refreshToken ? encrypt(refreshToken) : null,
-    clientSecret ? encrypt(clientSecret) : null,
-    Date.now(),
+    [teamId, mcpUrl || null, loginUrl || null, clientId || null, refreshToken ? encrypt(refreshToken) : null, clientSecret ? encrypt(clientSecret) : null, Date.now()],
   );
 }
 
 /**
  * @param {string} teamId
- * @returns {{ mcpUrl: string|null, loginUrl: string|null, clientId: string|null, refreshToken: string|null, clientSecret: string|null, connectedAt: number } | null}
+ * @returns {Promise<{ mcpUrl: string|null, loginUrl: string|null, clientId: string|null, refreshToken: string|null, clientSecret: string|null, connectedAt: number } | null>}
  */
-export function getSfConnection(teamId) {
-  const r = /** @type {any} */ (db.prepare('SELECT * FROM sf_connections WHERE team_id = ?').get(teamId));
+export async function getSfConnection(teamId) {
+  const r = await one('SELECT * FROM sf_connections WHERE team_id = ?', [teamId]);
   if (!r) return null;
   return {
     mcpUrl: r.mcp_url,
@@ -376,34 +370,35 @@ export function getSfConnection(teamId) {
 
 /**
  * @param {string} teamId
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function deleteSfConnection(teamId) {
-  db.prepare('DELETE FROM sf_connections WHERE team_id = ?').run(teamId);
+export async function deleteSfConnection(teamId) {
+  await run('DELETE FROM sf_connections WHERE team_id = ?', [teamId]);
 }
 
 /**
  * Store/replace a team's app settings (the Anthropic API key, encrypted).
  * @param {string} teamId
  * @param {{ anthropicKey?: string | null }} settings
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function setAppSettings(teamId, { anthropicKey }) {
-  db.prepare(
+export async function setAppSettings(teamId, { anthropicKey }) {
+  await run(
     `INSERT INTO app_settings (team_id, anthropic_key_enc, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(team_id) DO UPDATE SET
        anthropic_key_enc = COALESCE(excluded.anthropic_key_enc, app_settings.anthropic_key_enc),
        updated_at = excluded.updated_at`,
-  ).run(teamId, anthropicKey ? encrypt(anthropicKey) : null, Date.now());
+    [teamId, anthropicKey ? encrypt(anthropicKey) : null, Date.now()],
+  );
 }
 
 /**
  * @param {string} teamId
- * @returns {{ anthropicKey: string | null } | null}
+ * @returns {Promise<{ anthropicKey: string | null } | null>}
  */
-export function getAppSettings(teamId) {
+export async function getAppSettings(teamId) {
   if (!teamId) return null;
-  const r = /** @type {any} */ (db.prepare('SELECT anthropic_key_enc FROM app_settings WHERE team_id = ?').get(teamId));
+  const r = await one('SELECT anthropic_key_enc FROM app_settings WHERE team_id = ?', [teamId]);
   if (!r) return null;
   return { anthropicKey: r.anthropic_key_enc ? decrypt(r.anthropic_key_enc) : null };
 }
