@@ -113,6 +113,11 @@ const app = new App({
   ],
   installerOptions: {
     stateVerification: true,
+    // Verify the signed JWT state only, not a browser cookie. The cookie often
+    // doesn't survive the redirect through Slack on hosted/proxied deploys
+    // (Render, etc.), causing `slack_oauth_invalid_state`. The JWT is signed with
+    // SLACK_STATE_SECRET and expires in 10 min, so CSRF protection is retained.
+    legacyStateVerification: true,
     userScopes,
   },
 });
