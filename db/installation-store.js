@@ -39,7 +39,7 @@ export const installationStore = {
   deleteInstallation: async (query) => {
     const k = keyFrom(query);
     await db.execute({ sql: 'DELETE FROM installations WHERE install_key = ?', args: [k] });
-    const teamId = query.team?.id ?? query.teamId;
+    const teamId = query.teamId;
     if (teamId) await deleteTeamData(teamId); // purge the team's Loop data on uninstall
   },
 };
