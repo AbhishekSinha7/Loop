@@ -18,9 +18,9 @@ function timeAgo(ts) {
  * Render recent customer threads + their handoffs as Block Kit.
  * @param {string} teamId
  * @param {any[]} threads
- * @returns {any[]}
+ * @returns {Promise<any[]>}
  */
-function buildHistoryBlocks(teamId, threads) {
+async function buildHistoryBlocks(teamId, threads) {
   if (threads.length === 0) {
     return [{ type: 'section', text: { type: 'mrkdwn', text: '_No customer threads recorded yet._' } }];
   }
@@ -29,7 +29,7 @@ function buildHistoryBlocks(teamId, threads) {
   const blocks = [{ type: 'header', text: { type: 'plain_text', text: '🗂️ Customer history', emoji: true } }];
 
   for (const t of threads) {
-    const handoffs = handoffsForThread(teamId, t.id);
+    const handoffs = await handoffsForThread(teamId, t.id);
     const people = [...new Set(handoffs.map((h) => h.toId).filter(Boolean))].map((id) => `<@${id}>`);
     const count = handoffs.length;
     const bits = [`*<#${t.channelId}>*`, `🔁 ${count} handoff${count === 1 ? '' : 's'}`, `updated ${timeAgo(t.updatedAt)}`];
@@ -51,8 +51,8 @@ export async function handleCustomerHistory({ ack, context, respond, logger }) {
 
   try {
     const teamId = /** @type {string} */ (context.teamId);
-    const threads = recentThreads(teamId, 10);
-    await respond({ response_type: 'ephemeral', text: 'Customer history', blocks: buildHistoryBlocks(teamId, threads) });
+    const threads = await recentThreads(teamId, 10);
+    await respond({ response_type: 'ephemeral', text: 'Customer history', blocks: await buildHistoryBlocks(teamId, threads) });
   } catch (e) {
     logger.error(`Failed to build customer history: ${e}`);
   }

@@ -18,7 +18,7 @@ if (!teamId || !userId || !topic) {
 }
 
 const count = Number(countArg) || 3;
-for (let i = 0; i < count; i++) recordExpertise(teamId, { userId, topic });
+for (let i = 0; i < count; i++) await recordExpertise(teamId, { userId, topic });
 
 console.log(`Seeded ${count} "${topic}" handoff(s) for ${userId}.`);
 console.log(`Now hand a "${topic}" thread to a DIFFERENT user to see the routing suggestion`);

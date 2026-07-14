@@ -90,7 +90,7 @@ export async function completeConnect(code, state) {
   const json = /** @type {any} */ (await resp.json());
   if (!resp.ok || !json.refresh_token) throw new Error(`Token exchange failed: ${JSON.stringify(json)}`);
 
-  setSfConnection(p.teamId, {
+  await setSfConnection(p.teamId, {
     mcpUrl: p.mcpUrl,
     loginUrl: p.loginUrl,
     clientId: p.clientId,

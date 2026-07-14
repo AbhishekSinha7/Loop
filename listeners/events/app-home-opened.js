@@ -24,9 +24,10 @@ export async function handleAppHomeOpened({ client, context, logger }) {
       }
     }
 
-    const dashboard = {
-      threads: recentThreads(teamId, 6).map((t) => {
-        const hs = handoffsForThread(teamId, t.id);
+    const threadRows = await recentThreads(teamId, 6);
+    const threads = await Promise.all(
+      threadRows.map(async (t) => {
+        const hs = await handoffsForThread(teamId, t.id);
         return {
           channelId: t.channelId,
           handoffCount: hs.length,
@@ -34,10 +35,13 @@ export async function handleAppHomeOpened({ client, context, logger }) {
           updatedAt: t.updatedAt,
         };
       }),
-      expertise: expertiseSummary(teamId),
-      cases: recentCases(teamId, 5),
-      sfConnected: !!getSfConnection(teamId),
-      anthropicConfigured: !!getAppSettings(teamId)?.anthropicKey,
+    );
+    const dashboard = {
+      threads,
+      expertise: await expertiseSummary(teamId),
+      cases: await recentCases(teamId, 5),
+      sfConnected: !!(await getSfConnection(teamId)),
+      anthropicConfigured: !!(await getAppSettings(teamId))?.anthropicKey,
     };
     const view = buildAppHomeView(installUrl, isConnected, dashboard);
     await client.views.publish({ user_id: userId, view });

@@ -9,7 +9,7 @@ export async function handleOpenSettings({ ack, body, client, context, logger })
   await ack();
   try {
     const teamId = /** @type {string} */ (context.teamId || body.team?.id);
-    const hasKey = !!getAppSettings(teamId)?.anthropicKey;
+    const hasKey = !!(await getAppSettings(teamId))?.anthropicKey;
 
     await client.views.open({
       trigger_id: body.trigger_id,
@@ -60,14 +60,14 @@ export async function handleSettingsSubmit({ ack, body, view, context, logger })
   const key = (vals.anthropic_key?.v?.value || '').trim();
 
   // Require a key the first time (no existing one and none entered).
-  if (!key && !getAppSettings(teamId)?.anthropicKey) {
+  if (!key && !(await getAppSettings(teamId))?.anthropicKey) {
     await ack({ response_action: 'errors', errors: { anthropic_key: 'An Anthropic API key is required' } });
     return;
   }
 
   await ack();
   try {
-    if (key) setAppSettings(teamId, { anthropicKey: key });
+    if (key) await setAppSettings(teamId, { anthropicKey: key });
   } catch (e) {
     logger.error(`Save settings failed: ${e}`);
   }

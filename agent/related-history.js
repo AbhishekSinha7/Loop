@@ -28,7 +28,7 @@ export async function searchRelatedHistory(teamId, transcript, userToken) {
 
   // Streamed so the long server-side MCP search loop keeps the connection alive
   // instead of hitting a single-request timeout.
-  const stream = getAnthropic(teamId).beta.messages.stream(
+  const stream = (await getAnthropic(teamId)).beta.messages.stream(
     {
       model: 'claude-opus-4-8',
       max_tokens: 1024,

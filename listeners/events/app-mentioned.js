@@ -46,7 +46,7 @@ export async function handleAppMentioned({ client, context, event, logger, say, 
     // On a fresh thread, recall this user's OWN prior chats with the bot.
     let prompt = cleanedText;
     if (!existingSessionId) {
-      const memory = buildMemoryPrompt(recentUserTurns(teamId, userId), cleanedText);
+      const memory = buildMemoryPrompt(await recentUserTurns(teamId, userId), cleanedText);
       if (memory) prompt = memory;
     }
 
@@ -66,8 +66,8 @@ export async function handleAppMentioned({ client, context, event, logger, say, 
     }
 
     // Persist this exchange as the user's own memory (scoped by team + user).
-    recordUserTurn(teamId, userId, 'user', cleanedText);
-    if (responseText) recordUserTurn(teamId, userId, 'assistant', responseText);
+    await recordUserTurn(teamId, userId, 'user', cleanedText);
+    if (responseText) await recordUserTurn(teamId, userId, 'assistant', responseText);
   } catch (e) {
     logger.error(`Failed to handle app mention: ${e}`);
     await say({

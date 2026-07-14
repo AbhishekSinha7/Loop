@@ -11,20 +11,20 @@ const clients = new Map();
 /**
  * The Anthropic API key for a team: the team's own key, else the env fallback.
  * @param {string} [teamId]
- * @returns {string | undefined}
+ * @returns {Promise<string | undefined>}
  */
-export function getTeamApiKey(teamId) {
-  const teamKey = teamId ? getAppSettings(teamId)?.anthropicKey : null;
+export async function getTeamApiKey(teamId) {
+  const teamKey = teamId ? (await getAppSettings(teamId))?.anthropicKey : null;
   return teamKey || process.env.ANTHROPIC_API_KEY || undefined;
 }
 
 /**
  * An Anthropic client scoped to a team's API key (memoized by key).
  * @param {string} [teamId]
- * @returns {import('@anthropic-ai/sdk').Anthropic}
+ * @returns {Promise<import('@anthropic-ai/sdk').Anthropic>}
  */
-export function getAnthropic(teamId) {
-  const key = getTeamApiKey(teamId);
+export async function getAnthropic(teamId) {
+  const key = await getTeamApiKey(teamId);
   const cacheKey = key || '__env__';
   let client = clients.get(cacheKey);
   if (!client) {

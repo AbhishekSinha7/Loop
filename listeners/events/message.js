@@ -58,7 +58,7 @@ export async function handleMessage({ client, context, event, logger, say, saySt
       if (briefContext) {
         prompt = buildFollowupPrompt(briefContext, text);
       } else {
-        const memory = buildMemoryPrompt(recentUserTurns(teamId, userId), text);
+        const memory = buildMemoryPrompt(await recentUserTurns(teamId, userId), text);
         if (memory) prompt = memory;
       }
     }
@@ -91,8 +91,8 @@ export async function handleMessage({ client, context, event, logger, say, saySt
     }
 
     // Persist this exchange as the user's own memory (scoped by team + user).
-    recordUserTurn(teamId, userId, 'user', text);
-    if (responseText) recordUserTurn(teamId, userId, 'assistant', responseText);
+    await recordUserTurn(teamId, userId, 'user', text);
+    if (responseText) await recordUserTurn(teamId, userId, 'assistant', responseText);
   } catch (e) {
     logger.error(`Failed to handle message: ${e}`);
     await say({

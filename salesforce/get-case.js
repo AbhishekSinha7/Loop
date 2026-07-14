@@ -58,9 +58,9 @@ const STATUSES = ['New', 'Open', 'Working', 'Escalated'];
  * Deterministic placeholder case used when no Salesforce MCP server is configured.
  * @param {string} teamId
  * @param {string} ref
- * @returns {any}
+ * @returns {Promise<any>}
  */
-function mockCase(teamId, ref) {
+async function mockCase(teamId, ref) {
   const fixture = FIXTURES[ref];
   const n = [...ref].reduce((a, c) => a + c.charCodeAt(0), 0);
   const data = {
@@ -72,7 +72,7 @@ function mockCase(teamId, ref) {
     recentActivity: fixture?.recentActivity ?? 'Support requested logs from the customer ~2h ago; awaiting reply.',
     mock: true,
   };
-  upsertCase(teamId, ref, data);
+  await upsertCase(teamId, ref, data);
   return data;
 }
 
@@ -93,16 +93,16 @@ function mockCase(teamId, ref) {
 export async function getSalesforceCase(teamId, ref) {
   if (!ref) return null;
 
-  const conn = getSfConnection(teamId);
+  const conn = await getSfConnection(teamId);
   const url = conn?.mcpUrl || process.env.SALESFORCE_MCP_URL;
 
   // Serve from cache when fresh — but never let a stale mock shadow a live lookup.
-  const cached = getCase(teamId, ref);
+  const cached = await getCase(teamId, ref);
   if (cached && Date.now() - (cached.updatedAt || 0) < CACHE_TTL_MS && !(url && cached.mock)) {
     return cached;
   }
 
-  if (!url) return mockCase(teamId, ref);
+  if (!url) return await mockCase(teamId, ref);
 
   // Fresh OAuth access token for the hosted MCP server (auto-refreshed).
   const token = await getAccessToken(teamId);
@@ -110,7 +110,7 @@ export async function getSalesforceCase(teamId, ref) {
   // --- Live Salesforce via the hosted MCP server (Anthropic MCP connector) ---
   // Streamed so the multi-tool fetch (case + recent activity) keeps the
   // connection alive instead of hitting a single-request timeout.
-  const stream = getAnthropic(teamId).beta.messages.stream(
+  const stream = (await getAnthropic(teamId)).beta.messages.stream(
     {
       model: 'claude-opus-4-8',
       max_tokens: 1024,
@@ -152,6 +152,6 @@ export async function getSalesforceCase(teamId, ref) {
     recentActivity: parsed.recentActivity || '',
     mock: false,
   };
-  upsertCase(teamId, ref, data);
+  await upsertCase(teamId, ref, data);
   return data;
 }

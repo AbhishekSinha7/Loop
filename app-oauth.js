@@ -84,6 +84,24 @@ const app = new App({
   installationStore,
   customRoutes: [
     {
+      // Root landing page — a fast 200 (no redirect) so uptime/TLS checkers and
+      // visitors get an immediate response, with an install link.
+      path: '/',
+      method: ['GET'],
+      handler: (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(
+          '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>Loop — Customer Whisperer</title>' +
+            '<div style="font-family:system-ui,sans-serif;max-width:640px;margin:12vh auto;padding:0 24px;line-height:1.6">' +
+            '<h1>Loop — Customer Whisperer</h1>' +
+            '<p>An ambient Slack agent that briefs whoever gets handed a customer thread — the issue, the Salesforce case, related past threads, and a draft reply.</p>' +
+            '<p><a href="/slack/install" style="display:inline-block;padding:10px 18px;background:#4A154B;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Add to Slack</a></p>' +
+            '</div>',
+        );
+      },
+    },
+    {
       // Health probe for hosting platforms (Render/Railway/Fly/K8s).
       path: '/health',
       method: ['GET'],
@@ -113,6 +131,11 @@ const app = new App({
   ],
   installerOptions: {
     stateVerification: true,
+    // Verify the signed JWT state only, not a browser cookie. The cookie often
+    // doesn't survive the redirect through Slack on hosted/proxied deploys
+    // (Render, etc.), causing `slack_oauth_invalid_state`. The JWT is signed with
+    // SLACK_STATE_SECRET and expires in 10 min, so CSRF protection is retained.
+    legacyStateVerification: true,
     userScopes,
   },
 });
